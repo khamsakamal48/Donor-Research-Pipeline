@@ -1,0 +1,726 @@
+import numpy as np
+import streamlit as st
+import pandas as pd
+from sqlalchemy import create_engine
+
+# Function to create SQLAlchemy engine
+def get_db_connection():
+    engine = create_engine('postgresql+psycopg2://iitbdrf:iitbdrf%40123@10.199.4.145:5432/re_data')
+    return engine.connect()
+
+
+# Cache the function that fetches data from the SQL table
+@st.cache_data(ttl='1d')
+def fetch_data_from_sql(query):
+    conn = get_db_connection()
+    df = pd.read_sql(query, conn)
+    conn.close()
+    return df
+
+
+# Function to update SQL table
+def update_sql_table(data, table_name, schema):
+    conn = get_db_connection()
+    data.to_sql(table_name, conn, if_exists='replace', index=False, schema=schema)
+    conn.close()
+
+# Get Prospects
+def get_prospects():
+
+    query = '''
+            WITH
+                prospects AS (
+                    SELECT
+                        lookup_id AS constituent_id,
+                        id AS system_record_id
+                    FROM
+                        constituent_list AS cl
+                            INNER JOIN donor_research.prospects AS ab ON ab."RE ID" = cl.lookup_id
+                )
+
+            SELECT
+                CONCAT(name, ' (', id, ')') AS prospects
+            FROM
+                prospects AS ps
+                    LEFT JOIN constituent_list AS cl ON cl.id = ps.system_record_id;
+            '''
+
+    data = fetch_data_from_sql(query)
+
+    return data['prospects'].to_list()
+
+
+def get_basic_from_re(re_id):
+    query = f'''
+                SELECT
+                    lookup_id AS constituent_id,
+                    name,
+                    age,
+                    gender,
+                    address_city AS city,
+                    TRIM(CONCAT(address_county, ' ', address_state)) AS state,
+                    address_country AS country,
+                    deceased,
+                    cl.inactive,
+                    CASE
+                        WHEN LEFT(ol.address, 4) = 'http' THEN ol.address 
+                        ELSE CONCAT('https://', ol.address)
+                    END AS linkedin,
+                    CONCAT('https://host.nxt.blackbaud.com/constituent/records/',
+                           cl.id,'?envId=p-dzY8gGigKUidokeljxaQiA&svcId=renxt') AS re_profile_link
+                FROM
+                    constituent_list cl
+                    LEFT JOIN online_presence_list ol ON ol.constituent_id = cl.id
+                WHERE
+                    cl.id = '{re_id}' AND
+                    ol.type LIKE 'LinkedIn%%'
+                LIMIT 1;
+            '''
+
+    data = fetch_data_from_sql(query)
+
+    return data
+
+def get_donations(re_id):
+    query = f'''
+                SELECT
+                    CONCAT(
+                            RIGHT(REPLACE(date, 'T00:00:00', ''), 2),
+                            '-',
+                            SUBSTRING(date, 6, 2),
+                            '-',
+                            LEFT(date, 4)
+                    ) AS date,
+                    cl.description AS project,
+                    CASE
+                        WHEN gift_splits_0_fund_id = '457' THEN 'Heritage Fund'
+                        WHEN gift_splits_0_fund_id = '457' THEN 'IITAAUK'
+                        WHEN gift_splits_0_fund_id = '469' THEN 'Alumni Association'
+                        WHEN gift_splits_0_fund_id = '470' THEN 'HF Funds Raised but not received'
+                        WHEN gift_splits_0_fund_id = '471' THEN 'HF - Not Received'
+                        ELSE 'Alumni & Corporate Relationship'
+                    END AS office,
+                    amount_value AS amount
+                FROM
+                    gift_list gl
+                    LEFT JOIN campaign_list cl ON cl.id = CAST(gl.gift_splits_0_campaign_id AS INT)
+                WHERE
+                    gl.constituent_id = '{re_id}' AND
+                    amount_value > 0 AND
+                    type IN ('Donation', 'GiftInKind')
+                ORDER BY
+                    gl.date DESC;
+            '''
+
+    data = fetch_data_from_sql(query)
+
+    data_1 = pd.DataFrame(data={
+            'Lifetime Donation': data['amount'].sum(),
+        }, index=[0])
+
+    return data, data_1
+
+def get_employment(re_id):
+    query = f'''
+                SELECT
+                    name AS organisation,
+                    position,
+                    CAST(start_y AS TEXT) AS start_year,
+                    CAST(end_y AS TEXT) AS end_year
+                FROM
+                    relationship_list
+                WHERE
+                    (
+                        type = 'Employee' OR
+                        type = 'Employer' OR
+                        reciprocal_type = 'Employee' OR
+                        reciprocal_type = 'Employer'
+                    ) AND
+                    constituent_id = '{re_id}'
+                ORDER BY
+                    end_y DESC, start_y DESC;
+            '''
+
+    data = fetch_data_from_sql(query)
+
+    return data
+
+def get_education(re_id):
+    query = f'''
+                SELECT
+                    CASE 
+                        WHEN school = 'Indian Institute of Technology Bombay' THEN 'IIT Bombay'
+                        ELSE school 
+                    END AS school,
+                    class_of,
+                    degree,
+                    majors_0 AS department,
+                    social_organization AS hostel
+                FROM
+                    school_list
+                WHERE
+                    constituent_id = '{re_id}'
+                UNION
+                SELECT
+                    name AS school,
+                    CAST(end_y AS TEXT) AS class_of,
+                    position AS degree,
+                    NULL AS department,
+                    NULL AS hostel
+                FROM
+                    relationship_list
+                WHERE
+                    (
+                        type = 'Student' OR
+                        reciprocal_type = 'Student'
+                    ) AND
+                    constituent_id = '{re_id}'
+                ORDER BY
+                    class_of DESC;
+            '''
+
+    data = fetch_data_from_sql(query)
+
+    return data
+
+
+def get_awards(re_id):
+    query = f'''
+                SELECT
+                    value AS award,
+                    CONCAT(
+                        RIGHT(REPLACE(date, 'T00:00:00', ''), 2),
+                        '-',
+                        SUBSTRING(date, 6, 2),
+                        '-',
+                        LEFT(date, 4)
+                    ) AS date
+                FROM
+                    constituent_custom_fields
+                WHERE
+                    category = 'Awards' AND
+                    parent_id = '{re_id}';
+            '''
+
+    data = fetch_data_from_sql(query)
+
+    return data
+
+def process_live_alumni(data):
+    # Load to dataframe
+    data = pd.read_csv(data)
+
+    # Remove incorrect values
+    data['Employment Salary Min'] = data['Employment Salary Min'].replace('="0"', np.nan)
+    data['Employment Salary Max'] = data['Employment Salary Max'].replace('="0"', np.nan)
+    data['Person Rating (stars)'] = data['Person Rating (stars)'].replace('="0"', np.nan)
+
+    # Converting date-time column
+    data['Employment Captured Date'] = pd.to_datetime(data['Employment Captured Date'], format='%m/%d/%Y %H:%M:%S %p')
+
+    # Drop total column
+    data = data.drop(columns=['_totalcount_'])
+
+    # Add Live Alumni URL
+    data['Live Alumni URL'] = 'https://app.livealumni.com/people/details/' + data['id'].astype(str)
+
+    update_sql_table(data, 'live_alumni', 'donor_research')
+
+
+# Function to format amount in Indian number format (lakhs, crores)
+def format_inr(amount):
+    # Convert the number to a string
+    num_str = str(amount)
+
+    # Handle decimal part if any
+    if '.' in num_str:
+        int_part, dec_part = num_str.split('.')
+    else:
+        int_part, dec_part = num_str, None
+
+    # Start from the right side and add commas after every 2 digits, except for the first group (3 digits)
+    last_three = int_part[-3:]
+    remaining = int_part[:-3]
+
+    if remaining != '':
+        remaining = ','.join([remaining[max(i - 2, 0):i] for i in range(len(remaining), 0, -2)][::-1])
+        formatted_number = f'{remaining},{last_three}'
+    else:
+        formatted_number = last_three
+
+    return f'₹ {formatted_number}'
+
+
+def display_re_data(selection):
+    name = ' '.join(selection.split('(')[0].split()[:-1]) if selection.split('(')[0].split()[-1].isnumeric() \
+        else selection.split('(')[0]
+    system_record_id = selection.split('(')[1].strip(')')
+
+    st.title(name)
+    st.divider()
+
+    # Get Basic info of Prospect from RE
+    re_basic = get_basic_from_re(system_record_id)
+
+    st.subheader('Data from Raisers Edge')
+    st.text('')
+    st.dataframe(
+        re_basic.drop(columns=['name']),
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            'constituent_id': st.column_config.NumberColumn(
+                'RE ID',
+                format = '%d'
+            ),
+            'age': 'Age',
+            'gender': 'Gender',
+            'city': 'City',
+            'state': 'State',
+            'country': 'Country',
+            'deceased': 'Deceased',
+            'inactive': 'Inactive',
+            'linkedin': st.column_config.LinkColumn(
+                'LinkedIn',
+                display_text='Open LinkedIn',
+                width='small'
+            ),
+            're_profile_link': st.column_config.LinkColumn(
+                'Raisers Edge Profile',
+                display_text='Open in RE',
+                width='small'
+            )
+        }
+    )
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        # Employment from RE
+        st.write('**Employment**')
+        re_employment = get_employment(system_record_id)
+        st.dataframe(
+            re_employment,
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                'organisation': 'Organisation',
+                'position': 'Position',
+                'start_year': st.column_config.NumberColumn(
+                    'Joining Year',
+                    format='%d'
+                ),
+                'end_year': st.column_config.NumberColumn(
+                    'End Year',
+                    format='%d'
+                )
+            }
+        )
+
+        # Education from RE
+        st.write('**Education**')
+        re_education = get_education(system_record_id)
+        st.dataframe(
+            re_education,
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                'school': 'School',
+                'class_of': st.column_config.NumberColumn(
+                    'Batch',
+                    format='%d'
+                ),
+                'degree': 'Degree',
+                'department': 'Department',
+                'hostel': 'Hostel'
+            }
+        )
+
+    with col2:
+        re_donations, re_lifetime_donations = get_donations(system_record_id)
+        re_awards = get_awards(system_record_id)
+
+        # Assuming re_donations is your DataFrame
+        re_lifetime_donations['Lifetime Donation'] = re_lifetime_donations['Lifetime Donation'].apply(format_inr)
+
+        # Check if there are any donations
+        if re_donations.empty:
+            col3, col4 = st.columns(2)
+
+            with col3:
+                st.write(f'**Donations**')
+
+                st.dataframe(
+                    re_lifetime_donations,
+                    hide_index=True,
+                    use_container_width=True,
+                )
+
+            with col4:
+                st.write('**Awards**')
+
+                re_awards['date'] = pd.to_datetime(re_awards['date'])
+
+                st.dataframe(
+                    re_awards,
+                    hide_index=True,
+                    use_container_width=True,
+                    column_config={
+                        'award': 'Awards',
+                        'date': st.column_config.DateColumn(
+                        'Date',
+                        format='D MMM YYYY'
+                    )
+                    }
+                )
+
+        else:
+            st.write('**Donations**')
+
+            re_donations['date'] = pd.to_datetime(re_donations['date'], errors='ignore')
+
+            # Assuming re_donations is your DataFrame
+            re_donations['amount'] = re_donations['amount'].apply(format_inr)
+
+            st.dataframe(
+                re_donations,
+                hide_index=True,
+                use_container_width=True,
+                column_config={
+                    'date': st.column_config.DateColumn(
+                        'Date',
+                        format='D MMM YYYY'
+                    ),
+                    'project': 'Project / Campaign',
+                    'office': 'Office',
+                    'amount': st.column_config.TextColumn(
+                        'Amount'
+                    )
+                }
+            )
+
+            col3, col4 = st.columns(2)
+
+            with col3:
+                st.write('**Awards**')
+
+                re_awards['date'] = pd.to_datetime(re_awards['date'])
+
+                st.dataframe(
+                    re_awards,
+                    hide_index=True,
+                    use_container_width=True,
+                    column_config={
+                        'award': 'Awards',
+                        'date': st.column_config.DateColumn(
+                            'Date',
+                            format='D MMM YYYY'
+                        )
+                    }
+                )
+
+            with col4:
+                st.write('**Donation Summary**')
+                st.dataframe(
+                    re_lifetime_donations,
+                    hide_index=True,
+                    use_container_width=True
+                )
+
+    return system_record_id
+
+
+def usd_number_format(number):
+    # Convert the number to a string
+    num_str = str(number)
+
+    # Handle decimal part if any
+    if '.' in num_str:
+        int_part, dec_part = num_str.split('.')
+    else:
+        int_part, dec_part = num_str, None
+
+    # Start from the right side and add commas after every 3 digits
+    int_part_with_commas = ','.join([int_part[max(i - 3, 0):i] for i in range(len(int_part), 0, -3)][::-1])
+
+    # Add decimal part back if there was one
+    if dec_part:
+        formatted_number = f'{int_part_with_commas}.{dec_part}'
+    else:
+        formatted_number = int_part_with_commas
+
+    return f'${formatted_number}'
+
+
+def display_live_alumni_data(system_record_id):
+    st.subheader('')
+    st.subheader('Data from Live Alumni')
+
+    data = get_live_alumni(system_record_id)
+
+    if data.empty:
+        st.write('No data in Live Alumni')
+
+    else:
+        # Employment Data
+        st.write('')
+        col5, col6 = st.columns(2)
+
+        with col5:
+            st.write('**Employment**')
+            st.dataframe(
+                data[[
+                    'Employment Company Name',
+                    'Employment Title',
+                    'Employment Start Year',
+                    'Employment End Year'
+                ]].drop_duplicates(),
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    'Employment Company Name': 'Organisation',
+                    'Employment Title': 'Position',
+                    'Employment Start Year': st.column_config.NumberColumn(
+                        'Joining Year',
+                        format='%d'
+                    ),
+                    'Employment End Year': st.column_config.NumberColumn(
+                        'Joining Year',
+                        format='%d'
+                    )
+                }
+            )
+
+            st.write('**Position Details**')
+
+            data['Employment Salary Min'] = data['Employment Salary Min'].apply(usd_number_format)
+            data['Employment Salary Max'] = data['Employment Salary Max'].apply(usd_number_format)
+
+            st.dataframe(
+                data[[
+                    'Employment Title Is Senior',
+                    'Employment Seniority Level',
+                    'Employment Salary Min',
+                    'Employment Salary Max',
+                    'Person Rating (stars)'
+                ]].drop_duplicates(),
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    'Employment Title Is Senior': 'Is Senior?',
+                    'Employment Seniority Level': 'Seniority Level',
+                    'Employment Salary Min': 'Min. Salary',
+                    'Employment Salary Max': 'Max. Salary'
+                }
+            )
+
+        with col6:
+            col7, col8 = st.columns(2)
+
+            with col7:
+                st.write('**Headline**')
+                st.dataframe(
+                    data[[
+                        'Person Headline'
+                    ]].drop_duplicates(),
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        'Person Headline': 'Headline on LinkedIn'
+                    }
+                )
+
+            with col8:
+                st.write('**Online Links**')
+                st.dataframe(
+                    data[[
+                        'Live Alumni URL',
+                        'Person URL'
+                    ]].drop_duplicates(),
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        'Live Alumni URL': st.column_config.LinkColumn(
+                            'Live Alumni',
+                            display_text='Open Live Alumni',
+                            width='small'
+                        ),
+                        'Person URL': st.column_config.LinkColumn(
+                            'LinkedIn',
+                            display_text='Open LinkedIn',
+                            width='small'
+                        )
+                    }
+                )
+
+
+            st.write('**Location**')
+            loc = [col for col in data.columns if 'Location' in col]
+            loc_1 = [col.split()[1] for col in data.columns if 'Location' in col]
+
+            st.dataframe(
+                data[
+                    loc
+                ].drop_duplicates(),
+                use_container_width=True,
+                hide_index=True,
+                column_config=dict(zip(loc, loc_1))
+            )
+
+        col9, col10 = st.columns(2)
+
+        with col9:
+            st.write('**Industry Details**')
+            st.dataframe(
+                data[
+                    [col for col in data.columns if col.startswith('Company')]
+                ].drop_duplicates(),
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    'Company Industry Name': 'Industry',
+                    'Company Type Type': 'Type',
+                    'Company Details Size': 'Size',
+                    'Company Details Sector': 'Sector'
+                }
+            )
+
+        with col10:
+            st.write('**Education**')
+            st.dataframe(
+                data[[
+                    'University Name',
+                    'Education Start Date',
+                    'Education End Date',
+                    'Education Degree',
+                    'Education Major'
+                ]],
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    'University Name': 'University',
+                    'Education Start Date': st.column_config.NumberColumn(
+                        'Joining Year',
+                        format='%d',
+                        width='small'
+                    ),
+                    'Education End Date': st.column_config.NumberColumn(
+                        'Graduated on',
+                        format='%d',
+                        width='small'
+                    ),
+                    'Education Degree': 'Degree',
+                    'Education Major': 'Department'
+                }
+            )
+
+
+def get_live_alumni(re_id):
+    query = f'''
+                WITH
+                    la_re_mapping AS (
+                        SELECT
+                            parent_id AS re_id,
+                            CAST(value AS INT) AS live_alumni_id
+                        FROM
+                            constituent_custom_fields
+                        WHERE
+                            category = 'Live Alumni ID'
+                    )
+                
+                SELECT
+                    *
+                FROM
+                    donor_research.live_alumni AS la
+                    RIGHT JOIN la_re_mapping AS map ON map.live_alumni_id = la.id
+                WHERE
+                    map.re_id = '{re_id}'
+            '''
+
+    data = fetch_data_from_sql(query)
+
+    return data
+
+# Streamlit form to edit and submit data
+def main():
+
+    # Get Prospects
+    prospects = get_prospects()
+
+    with st.sidebar:
+
+        # Add Title
+        st.title('Donor Research')
+        st.divider()
+
+        # Get a drop-down list of prospects
+        st.header('Select Prospect')
+        prospect = st.selectbox(
+            'Prospects',
+            prospects,
+            placeholder="Select a Prospect...",
+            index=None,
+            label_visibility = 'hidden'
+        )
+
+        st.divider()
+
+        # Upload data from Live Alumni
+        st.header('Upload Data from Live Alumni')
+        uploaded_file = st.file_uploader(
+            'Upload Files',
+            type=['csv'],
+            label_visibility='hidden'
+        )
+
+        if uploaded_file:
+            with st.status('Uploading Live Alumni Data...', expanded=True) as status:
+                process_live_alumni(uploaded_file)
+                status.update(
+                    label='Live Alumni Data uploaded successfully!',
+                    state="complete",
+                    expanded=False
+                )
+
+        # Clear Cache
+        if st.button("Clear Cache"):
+            # Clear values from *all* all in-memory and on-disk data caches:
+            # i.e. clear values from both square and cube
+            st.cache_data.clear()
+
+    # On selection
+    if prospect:
+        # Display RE Data
+        system_record_id = display_re_data(prospect)
+
+        # Display Live Alumni Data
+        display_live_alumni_data(system_record_id)
+
+    # # Display editable data in Streamlit
+    # st.write("Here is your data:")
+    # edited_data = st.experimental_data_editor(data)
+    #
+    # # Submit button
+    # if st.button("Submit"):
+    #     # Update the SQL table with edited data
+    #     update_sql_table(edited_data, 'your_table')
+    #     st.success("Data updated successfully!")
+
+
+if __name__ == '__main__':
+    st.set_page_config(
+        page_title='Donor Research',
+        page_icon=':bulb:',
+        layout='wide'
+    )
+
+    hide_style = '''
+    <style>
+        #MainMenu {visibility: hidden;}
+        footer {visibility: hidden;}
+    </style>
+    '''
+
+    st.markdown(hide_style, unsafe_allow_html=True)
+
+    main()
