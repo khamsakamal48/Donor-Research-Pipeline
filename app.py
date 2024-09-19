@@ -1,7 +1,10 @@
+import time
 import numpy as np
 import streamlit as st
 import pandas as pd
 from sqlalchemy import create_engine
+from datetime import datetime
+from datetime import date
 
 # Function to create SQLAlchemy engine
 def get_db_connection():
@@ -19,33 +22,62 @@ def fetch_data_from_sql(query):
 
 
 # Function to update SQL table
-def update_sql_table(data, table_name, schema):
+def update_sql_table(data, table_name, schema, replace=True):
     conn = get_db_connection()
-    data.to_sql(table_name, conn, if_exists='replace', index=False, schema=schema)
+    data.to_sql(table_name, conn, if_exists='replace' if replace else 'append', index=False, schema=schema)
     conn.close()
 
 # Get Prospects
 def get_prospects():
 
-    query = '''
-            WITH
-                prospects AS (
-                    SELECT
-                        lookup_id AS constituent_id,
-                        id AS system_record_id
-                    FROM
-                        constituent_list AS cl
+    try:
+        query = '''
+                WITH
+                    prospects AS (
+                        SELECT
+                            lookup_id AS constituent_id,
+                            id AS system_record_id
+                        FROM
+                            constituent_list AS cl
                             INNER JOIN donor_research.prospects AS ab ON ab."RE ID" = cl.lookup_id
-                )
+                        WHERE
+                            id NOT IN (
+                                SELECT
+                                    parent_id
+                                FROM
+                                    donor_research.employment
+                                )    
+                    )
+    
+                SELECT
+                    CONCAT(name, ' (', id, ')') AS prospects
+                FROM
+                    prospects AS ps
+                        LEFT JOIN constituent_list AS cl ON cl.id = ps.system_record_id;
+                '''
 
-            SELECT
-                CONCAT(name, ' (', id, ')') AS prospects
-            FROM
-                prospects AS ps
-                    LEFT JOIN constituent_list AS cl ON cl.id = ps.system_record_id;
-            '''
+        data = fetch_data_from_sql(query)
 
-    data = fetch_data_from_sql(query)
+    except:
+        query = '''
+                WITH
+                    prospects AS (
+                        SELECT
+                            lookup_id AS constituent_id,
+                            id AS system_record_id
+                        FROM
+                            constituent_list AS cl
+                            INNER JOIN donor_research.prospects AS ab ON ab."RE ID" = cl.lookup_id
+                    )
+
+                SELECT
+                    CONCAT(name, ' (', id, ')') AS prospects
+                FROM
+                    prospects AS ps
+                        LEFT JOIN constituent_list AS cl ON cl.id = ps.system_record_id;
+                '''
+
+        data = fetch_data_from_sql(query)
 
     return data['prospects'].to_list()
 
@@ -183,7 +215,6 @@ def get_education(re_id):
 
     return data
 
-
 def get_awards(re_id):
     query = f'''
                 SELECT
@@ -226,7 +257,6 @@ def process_live_alumni(data):
 
     update_sql_table(data, 'live_alumni', 'donor_research')
 
-
 # Function to format amount in Indian number format (lakhs, crores)
 def format_inr(amount):
     # Convert the number to a string
@@ -249,7 +279,6 @@ def format_inr(amount):
         formatted_number = last_three
 
     return f'₹ {formatted_number}'
-
 
 def display_re_data(selection):
     name = ' '.join(selection.split('(')[0].split()[:-1]) if selection.split('(')[0].split()[-1].isnumeric() \
@@ -377,7 +406,7 @@ def display_re_data(selection):
         else:
             st.write('**Donations**')
 
-            re_donations['date'] = pd.to_datetime(re_donations['date'], errors='ignore')
+            re_donations['date'] = pd.to_datetime(re_donations['date'], dayfirst=True)
 
             # Assuming re_donations is your DataFrame
             re_donations['amount'] = re_donations['amount'].apply(format_inr)
@@ -404,7 +433,7 @@ def display_re_data(selection):
             with col3:
                 st.write('**Awards**')
 
-                re_awards['date'] = pd.to_datetime(re_awards['date'])
+                re_awards['date'] = pd.to_datetime(re_awards['date'], dayfirst=True)
 
                 st.dataframe(
                     re_awards,
@@ -429,27 +458,32 @@ def display_re_data(selection):
 
     return system_record_id
 
-
 def usd_number_format(number):
-    # Convert the number to a string
-    num_str = str(number)
 
-    # Handle decimal part if any
-    if '.' in num_str:
-        int_part, dec_part = num_str.split('.')
+    if number is None:
+        return number
+
     else:
-        int_part, dec_part = num_str, None
 
-    # Start from the right side and add commas after every 3 digits
-    int_part_with_commas = ','.join([int_part[max(i - 3, 0):i] for i in range(len(int_part), 0, -3)][::-1])
+        # Convert the number to a string
+        num_str = str(number)
 
-    # Add decimal part back if there was one
-    if dec_part:
-        formatted_number = f'{int_part_with_commas}.{dec_part}'
-    else:
-        formatted_number = int_part_with_commas
+        # Handle decimal part if any
+        if '.' in num_str:
+            int_part, dec_part = num_str.split('.')
+        else:
+            int_part, dec_part = num_str, None
 
-    return f'${formatted_number}'
+        # Start from the right side and add commas after every 3 digits
+        int_part_with_commas = ','.join([int_part[max(i - 3, 0):i] for i in range(len(int_part), 0, -3)][::-1])
+
+        # Add decimal part back if there was one
+        if dec_part:
+            formatted_number = f'{int_part_with_commas}.{dec_part}'
+        else:
+            formatted_number = int_part_with_commas
+
+        return f'$ {formatted_number}'
 
 
 def display_live_alumni_data(system_record_id):
@@ -485,7 +519,7 @@ def display_live_alumni_data(system_record_id):
                         format='%d'
                     ),
                     'Employment End Year': st.column_config.NumberColumn(
-                        'Joining Year',
+                        'End Year',
                         format='%d'
                     )
                 }
@@ -515,7 +549,7 @@ def display_live_alumni_data(system_record_id):
             )
 
         with col6:
-            col7, col8 = st.columns(2)
+            col7, col8 = st.columns([0.8, 0.2])
 
             with col7:
                 st.write('**Headline**')
@@ -542,12 +576,12 @@ def display_live_alumni_data(system_record_id):
                     column_config={
                         'Live Alumni URL': st.column_config.LinkColumn(
                             'Live Alumni',
-                            display_text='Open Live Alumni',
+                            display_text='Open',
                             width='small'
                         ),
                         'Person URL': st.column_config.LinkColumn(
                             'LinkedIn',
-                            display_text='Open LinkedIn',
+                            display_text='Open',
                             width='small'
                         )
                     }
@@ -614,7 +648,6 @@ def display_live_alumni_data(system_record_id):
                 }
             )
 
-
 def get_live_alumni(re_id):
     query = f'''
                 WITH
@@ -640,6 +673,306 @@ def get_live_alumni(re_id):
     data = fetch_data_from_sql(query)
 
     return data
+
+def save_manual_employment(re_id):
+    st.write('**Employment** `(auto-populated from Live Alumni & Raisers Edge)`')
+    re_employment = get_employment(re_id)
+
+    # RE Data
+    re_employment = re_employment.rename(columns={
+        'organisation': 'Organisation',
+        'position': 'Position',
+        'start_year': 'Joining Year',
+        'end_year': 'End Year'
+    })
+
+    # Live Alumni Data
+    la_employment = get_live_alumni(re_id)
+
+    la_employment = la_employment.drop_duplicates()
+
+    la_employment = la_employment[['Employment Company Name', 'Employment Title', 'Employment Start Year',
+                                   'Employment End Year']]
+
+    la_employment = la_employment.rename(columns={
+        'Employment Company Name': 'Organisation',
+        'Employment Title': 'Position',
+        'Employment Start Year': 'Joining Year',
+        'Employment End Year': 'End Year'
+    })
+
+    data = pd.concat([la_employment, re_employment], ignore_index=True, axis=0)
+
+    data['Organisation'] = data['Organisation'].str.strip()
+    data['Position'] = data['Position'].str.strip()
+
+    data['Is Senior?'] = None
+    data['Stakes left'] = None
+    data['Shares owned'] = None
+    data['Funding Stage'] = None
+    data['Company Valuation'] = None
+    data['Share Price'] = None
+    data['Comments'] = None
+
+    data = data.drop_duplicates(ignore_index=True).reset_index(drop=True)
+
+    return data
+
+def save_manual_education(re_id):
+
+    # RE Data
+    re_education = get_education(re_id)
+
+    re_education = re_education.rename(columns={
+        'school': 'University',
+        'hostel': 'Hostel',
+        'class_of': 'Graduated on',
+        'degree': 'Degree',
+        'department': 'Department'
+    })
+
+    # Live Alumni
+    la_education = get_live_alumni(re_id)
+
+    la_education = la_education[[
+                    'University Name',
+                    'Education Start Date',
+                    'Education End Date',
+                    'Education Degree',
+                    'Education Major'
+                ]]
+
+    la_education = la_education.rename(columns={
+        'University Name': 'University',
+        'Education Start Date': 'Joining Year',
+        'Education End Date': 'Graduated on',
+        'Education Degree': 'Degree',
+        'Education Major': 'Department'
+    })
+
+    data = pd.concat([re_education, la_education], ignore_index=True, axis=0)
+
+    data = data[['University', 'Joining Year', 'Graduated on', 'Degree', 'Department', 'Hostel']]
+
+    data = data.drop_duplicates(ignore_index=True).reset_index(drop=True)
+
+    data = data.sort_values(by=['Graduated on', 'Joining Year'], ascending=[False, True], ignore_index=True)
+
+    return data
+
+
+def save_manual_location():
+    data = pd.DataFrame(data={
+        'Location': [None]
+    })
+
+    return data
+
+
+def save_manual_philanthropy():
+    data = pd.DataFrame(data={
+        'Foundation': [None],
+        'Date': [None],
+        'Amount': [None],
+        'Comments': [None]
+    })
+
+    return data
+
+
+def get_df_shape_product(df):
+    return df.shape[0] * df.shape[1]
+
+def get_null_values(df):
+    return df.replace('', None).isnull().sum().sum()
+
+
+def capture_manual_data(re_id):
+    st.subheader('')
+    st.subheader('Manual research')
+
+    manual_employment = st.data_editor(
+        save_manual_employment(re_id=re_id),
+        num_rows='dynamic',
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            'Organisation': st.column_config.TextColumn(
+                'Organisation'
+            ),
+            'Joining Year': st.column_config.NumberColumn(
+                'Joining Year',
+                format='%d',
+                min_value=1962,
+                max_value=int(date.today().strftime('%Y'))
+            ),
+            'End Year': st.column_config.NumberColumn(
+                'End Year',
+                format='%d',
+                min_value=1962,
+                max_value=int(date.today().strftime('%Y'))
+            ),
+            'Is Senior?': st.column_config.CheckboxColumn(
+                'Is Senior?',
+                default=False,
+            ),
+            'Stakes left': st.column_config.NumberColumn(
+                '% Stakes left',
+                min_value=0.00,
+                max_value=100,
+                step=0.01,
+                help='Percentage Stakes Left after the final stage / Hold currently'
+            ),
+            'Shares owned': st.column_config.NumberColumn(
+                'Shares owned',
+                min_value=0,
+                format='%d',
+                help='Number of shares owned if the company is Public'
+            ),
+            'Funding Stage': st.column_config.SelectboxColumn(
+                'Funding Stage',
+                default=None,
+                options=[
+                    'Early Stage VC',
+                    'Pre-seed',
+                    'Seed',
+                    'Series A',
+                    'Series B',
+                    'Series C',
+                    'Series D',
+                    'IPO',
+                    'Exit'
+                ]
+            ),
+            'Company Valuation': st.column_config.NumberColumn(
+                'Company Valuation',
+                min_value=0.00,
+                format='₹ %d Cr.'
+            ),
+            'Share Price': st.column_config.NumberColumn(
+                'Share Price',
+                min_value=0.00,
+                format='₹ %d'
+            )
+        }
+    )
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.write('**Education**')
+        manual_education = st.data_editor(
+            save_manual_education(re_id),
+            num_rows='dynamic',
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                'University': st.column_config.TextColumn(
+                    'University'
+                ),
+                'Joining Year': st.column_config.NumberColumn(
+                    'Joined',
+                    format='%d',
+                    min_value=1962,
+                    max_value=int(date.today().strftime('%Y')) + 5
+                ),
+                'Graduated on': st.column_config.NumberColumn(
+                    'Left',
+                    format='%d',
+                    min_value=1962,
+                    max_value=int(date.today().strftime('%Y'))
+                )
+            }
+        )
+
+    with col2:
+        col3, col4 = st.columns([0.8, 0.2])
+
+        with col3:
+            st.write('**Philanthropy**')
+            manual_philanthropy = st.data_editor(
+                save_manual_philanthropy(),
+                num_rows='dynamic',
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    'Date': st.column_config.DateColumn(
+                        'Date',
+                        format='MMM YYYY'
+                    ),
+                    'Amount': st.column_config.NumberColumn(
+                        'Amount',
+                        min_value=0.00,
+                        format='₹ %d Cr.'
+                    )
+                }
+            )
+
+        with col4:
+            st.write('**Location**')
+            manual_location =  st.data_editor(
+                save_manual_location(),
+                use_container_width=True,
+                hide_index=True
+            )
+
+    # Submit button
+    if st.button('Submit', type='primary', use_container_width=True):
+
+        if get_null_values(manual_employment.drop(columns=['Is Senior?'])) == \
+                get_df_shape_product(manual_employment.drop(columns=['Is Senior?'])) \
+                and get_null_values(manual_education) == get_df_shape_product(manual_education) \
+                and get_null_values(manual_location) == get_df_shape_product(manual_location) \
+                and get_null_values(manual_philanthropy) == get_df_shape_product(manual_philanthropy):
+            st.error('No data to upload', icon='❗️')
+
+        else:
+
+            # Update the SQL table with employment data
+            st.toast('Uploading Data', icon='⬆️')
+            time.sleep(1)
+
+            # Updating Employment
+            if get_null_values(manual_employment.drop(columns=['Is Senior?'])) != \
+                    get_df_shape_product(manual_employment.drop(columns=['Is Senior?'])):
+                manual_employment['parent_id'] = re_id
+                manual_employment['updated_on'] = datetime.now()
+                update_sql_table(manual_employment, 'employment', schema='donor_research', replace=False)
+
+            # Updating Location
+            if get_null_values(manual_location) != get_df_shape_product(manual_location):
+                manual_location['parent_id'] = re_id
+                manual_location['updated_on'] = datetime.now()
+                update_sql_table(manual_location, 'location', schema='donor_research', replace=False)
+
+            # Updating Education
+            if get_null_values(manual_education) != get_df_shape_product(manual_education):
+                manual_education['parent_id'] = re_id
+                manual_education['updated_on'] = datetime.now()
+                update_sql_table(manual_education, 'education', schema='donor_research', replace=False)
+
+            # Updating Philanthropy
+            if get_null_values(manual_philanthropy) != get_df_shape_product(manual_philanthropy):
+                manual_philanthropy['parent_id'] = re_id
+                manual_philanthropy['updated_on'] = datetime.now()
+                update_sql_table(manual_philanthropy, 'philanthropy', schema='donor_research', replace=False)
+
+            st.toast('Data Uploaded Successfully!', icon='✅')
+            time.sleep(1)
+
+            # Clearing Cache
+            st.toast('Clearing Cache', icon='🗑️')
+            time.sleep(1)
+            st.cache_data.clear()
+
+            # Reloading Page
+            st.toast('Reloading Page', icon='🔄')
+            time.sleep(1)
+
+            st.toast('Please proceed now', icon='🙏🏻')
+            time.sleep(1)
+            st.rerun()
+
 
 # Streamlit form to edit and submit data
 def main():
@@ -696,16 +1029,8 @@ def main():
         # Display Live Alumni Data
         display_live_alumni_data(system_record_id)
 
-    # # Display editable data in Streamlit
-    # st.write("Here is your data:")
-    # edited_data = st.experimental_data_editor(data)
-    #
-    # # Submit button
-    # if st.button("Submit"):
-    #     # Update the SQL table with edited data
-    #     update_sql_table(edited_data, 'your_table')
-    #     st.success("Data updated successfully!")
-
+        # Display editable data in Streamlit
+        capture_manual_data(system_record_id)
 
 if __name__ == '__main__':
     st.set_page_config(
