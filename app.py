@@ -745,7 +745,9 @@ def save_manual_employment(re_id):
     data['Organisation'] = data['Organisation'].str.strip()
     data['Position'] = data['Position'].str.strip()
 
+    data['Industry'] = None
     data['Is Senior?'] = None
+    data['Salary'] = None
     data['Stakes left'] = None
     data['Shares owned'] = None
     data['Funding Stage'] = None
@@ -866,7 +868,9 @@ def get_research_employment(re_id):
                 "Position",
                 "Joining Year",
                 "End Year",
+                "Industry",
                 "Is Senior?",
+                "Salary",
                 "Stakes left",
                 "Shares owned",
                 "Funding Stage",
@@ -899,7 +903,9 @@ def get_research_employment(re_id):
             'Position': [None],
             'Joining Year': [None],
             'End Year': [None],
+            'Industry': [None],
             'Is Senior?': [None],
+            'Salary': [np.nan],
             'Stakes left': [np.nan],
             'Shares owned': [np.nan],
             'Funding Stage': [None],
@@ -1185,6 +1191,11 @@ def employment_config():
                     'Share Price',
                     min_value=0.00,
                     format='₹ %d'
+                ),
+                'Salary': st.column_config.NumberColumn(
+                    'Annual Salary',
+                    min_value=0.00,
+                    format='$ %d M'
                 )
             }
 
@@ -1248,10 +1259,6 @@ def capture_manual_data(re_id, update=False):
                 st.error('Nothing to update', icon='❗️')
 
             else:
-                # Update the SQL table with employment data
-                # st.toast('Updating Data', icon='⬆️')
-                # time.sleep(1)
-
                 # Updating Employment
                 if get_null_values(employment.drop(columns=['Is Senior?'])) != \
                         get_df_shape_product(employment.drop(columns=['Is Senior?'])):
@@ -1289,18 +1296,8 @@ def capture_manual_data(re_id, update=False):
                     net_worth['updated_on'] = datetime.now()
                     update_sql_table(net_worth, 'remarks', schema='donor_research', replace=False)
 
-                # time.sleep(1)
-
-                # # Clearing Cache
-                # st.toast('Clearing Cache', icon='🗑️')
-                # time.sleep(1)
                 st.cache_data.clear()
-                #
-                # # Reloading Page
-                # st.toast('Reloading Page', icon='🔄')
-                # time.sleep(1)
-                #
-                # st.toast('Please proceed now', icon='🙏🏻')
+
                 st.toast('Data Updated Successfully!', icon='✅')
                 time.sleep(1)
                 st.rerun()
