@@ -8,13 +8,14 @@ from sqlalchemy import create_engine
 from datetime import datetime
 from datetime import date
 from dotenv import load_dotenv
+from urllib.parse import quote_plus
 
 # Retrieve contents from .env file
 load_dotenv()
 DB_IP = os.getenv('DB_IP')
 DB_PORT = os.getenv('DB_PORT')
 DB_USER = os.getenv('DB_USER')
-DB_PASS = os.getenv('DB_PASS')
+DB_PASS = quote_plus(os.getenv('DB_PASS'))
 DB = os.getenv('DB')
 
 # Function to create SQLAlchemy engine
