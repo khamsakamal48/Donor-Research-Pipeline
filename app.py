@@ -32,32 +32,37 @@ def update_sql_table(data, table_name, schema, replace=True):
 # Get Prospects
 def get_prospects(update=False):
     if update:
-        query = '''
-                WITH
-                    prospects AS (
-                        SELECT
-                            lookup_id AS constituent_id,
-                            id AS system_record_id
-                        FROM
-                            constituent_list AS cl
-                            INNER JOIN donor_research.prospects AS ab ON ab."RE ID" = cl.lookup_id
-                    )
+        try:
+            query = '''
+                            WITH
+                                prospects AS (
+                                    SELECT
+                                        lookup_id AS constituent_id,
+                                        id AS system_record_id
+                                    FROM
+                                        constituent_list AS cl
+                                        INNER JOIN donor_research.prospects AS ab ON ab."RE ID" = cl.lookup_id
+                                )
 
-                SELECT
-                    CONCAT(name, ' (', id, ')') AS prospects
-                FROM
-                    prospects AS ps
-                    LEFT JOIN constituent_list AS cl ON cl.id = ps.system_record_id
-                    WHERE
-                        id IN (
-                                SELECT
-                                    parent_id
-                                FROM
-                                    donor_research.employment
-                            );
-                '''
-        
-        data = fetch_data_from_sql(query)
+                            SELECT
+                                CONCAT(name, ' (', id, ')') AS prospects
+                            FROM
+                                prospects AS ps
+                                LEFT JOIN constituent_list AS cl ON cl.id = ps.system_record_id
+                                WHERE
+                                    id IN (
+                                            SELECT
+                                                parent_id
+                                            FROM
+                                                donor_research.employment
+                                        );
+                            '''
+
+            data = fetch_data_from_sql(query)
+
+        except SQLAlchemyError:
+            st.warning('No prospects researched yet!')
+            st.stop()
 
     else:
         try:
