@@ -1,7 +1,5 @@
 import time
-from encodings import undefined
-from multiprocessing.context import ProcessError
-
+import os
 import numpy as np
 import streamlit as st
 import pandas as pd
@@ -9,10 +7,19 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import create_engine
 from datetime import datetime
 from datetime import date
+from dotenv import load_dotenv
+
+# Retrieve contents from .env file
+load_dotenv()
+DB_IP = os.getenv('DB_IP')
+DB_PORT = os.getenv('DB_PORT')
+DB_USER = os.getenv('DB_USER')
+DB_PASS = os.getenv('DB_PASS')
+DB = os.getenv('DB')
 
 # Function to create SQLAlchemy engine
 def get_db_connection():
-    engine = create_engine('postgresql+psycopg2://iitbdrf:iitbdrf%40123@10.199.4.145:5432/re_data')
+    engine = create_engine(f'postgresql+psycopg2://{DB_USER}:{DB_PASS}@{DB_IP}:{DB_PASS}/{DB}')
     return engine.connect()
 
 # Cache the function that fetches data from the SQL table

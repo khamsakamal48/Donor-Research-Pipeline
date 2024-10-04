@@ -4,3 +4,4 @@ streamlit
 sqlalchemy
 psycopg2-binary
 watchdog
+python-dotenv
