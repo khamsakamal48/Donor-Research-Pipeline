@@ -1,46 +1,108 @@
-import time
-import os
-import numpy as np
-import streamlit as st
-import pandas as pd
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy import create_engine
-from datetime import datetime
-from datetime import date
-from dotenv import load_dotenv
-from urllib.parse import quote_plus
+# Import required libraries:
+import time                                 # for handling timing-related functions (e.g., sleep)
+import os                                   # for interacting with the operating system (e.g., reading environment variables)
+import numpy as np                          # for numerical computations
+import streamlit as st                      # for building the web application
+import pandas as pd                         # for data manipulation and analysis
+from sqlalchemy.exc import SQLAlchemyError  # for handling database-related errors (SQLAlchemyError)
+from sqlalchemy import create_engine        # for interacting with databases using SQLAlchemy
+from datetime import datetime               # for working with dates and times
+from datetime import date                   # for working with dates
+from dotenv import load_dotenv              # for loading environment variables from a .env file
+from urllib.parse import quote_plus         # for URL encoding
 
 # Retrieve contents from .env file
+#   - This is typically done at the top of the script to ensure environment variables are loaded.
 load_dotenv()
-DB_IP = os.getenv('DB_IP')
-DB_PORT = os.getenv('DB_PORT')
-DB_USER = os.getenv('DB_USER')
-DB_PASS = quote_plus(os.getenv('DB_PASS'))
-DB = os.getenv('DB')
 
-# Function to create SQLAlchemy engine
+# Define database configuration variables:
+#   - These variables contain sensitive information (e.g., IP address, password) that should be kept secure in a .env file or similar secure storage mechanism.
+
+# Database connection settings
+DB_IP = os.getenv('DB_IP')                  # IP address of the PostgreSQL database server
+DB_PORT = os.getenv('DB_PORT')              # Port number to use when connecting to the database
+DB_USER = os.getenv('DB_USER')              # Username to use for database connections
+DB_PASS = quote_plus(os.getenv('DB_PASS'))  # Password to use for database connections (URL-encoded for security)
+DB = os.getenv('DB')                        # Database name or schema to connect to
+
+# Function to create SQLAlchemy engine:
+#   - This function establishes a connection to the PostgreSQL database using SQLAlchemy.
 def get_db_connection():
+    """
+    Establishes a connection to the PostgreSQL database using SQLAlchemy.
+    - The `postgresql+psycopg2` dialect indicates that we're using PostgreSQL as the database backend.
+    - The `{DB_USER}:{DB_PASS}` part specifies the username and password to use for connections.
+    - The `@{DB_IP}:{DB_PORT}` part specifies the hostname and port number to use when connecting to the database.
+    - The `/`${DB}` part specifies the database name or schema to connect to.
+
+    :return: engine.connect(): An active connection object to the PostgreSQL database.
+    """
     engine = create_engine(f'postgresql+psycopg2://{DB_USER}:{DB_PASS}@{DB_IP}:{DB_PORT}/{DB}')
+
+    # Establish a connection to the database:
+    #   - This returns an active connection object, which can be used to execute queries and interact with the database.
     return engine.connect()
 
-# Cache the function that fetches data from the SQL table
+# Cache the function that fetches data from the SQL table:
+#   - This is a Streamlit caching mechanism that stores the result of this function for 1 day.
 @st.cache_data(ttl='1d')
 def fetch_data_from_sql(query):
+    """
+    Fetches data from a SQL table and returns it as a pandas DataFrame.
+
+    :param query: (str) The SQL query to execute on the database.
+    :return: pd.DataFrame: A pandas DataFrame containing the results of the SQL query.
+    """
+
+    # Establish a connection to the PostgreSQL database using get_db_connection():
     conn = get_db_connection()
+
+    # Execute the SQL query on the database and store the result in a pandas DataFrame:
     df = pd.read_sql(query, conn)
+
+    # Close the connection to the database to free up resources:
     conn.close()
+
+    # Return the pandas DataFrame containing the results of the SQL query:
     return df
 
-# Function to update SQL table
+# Function to update SQL table:
+#   - This function updates an existing SQL table by adding or replacing data.
 def update_sql_table(data, table_name, schema, replace=True):
+    """
+    Updates an existing SQL table by adding or replacing data.
+
+    :param data: (pd.DataFrame) The data to be updated in the SQL table.
+    :param table_name: (str) The name of the SQL table to be updated.
+    :param schema: (str) The schema of the SQL table.
+    :param replace: (bool, optional) Whether to replace existing data. Defaults to True.
+    :return: None
+    """
+
+    # Establish a connection to the PostgreSQL database using get_db_connection():
     conn = get_db_connection()
+
+    # Update the SQL table by adding or replacing data.
+    # - If `replace` is True, the existing data in the table will be replaced with new data.
+    # - If `replace` is False (default), new data will be appended to the existing data in the table.
     data.to_sql(table_name, conn, if_exists='replace' if replace else 'append', index=False, schema=schema)
+
+    # Close the connection to the database to free up resources:
     conn.close()
 
-# Get Prospects
+# Get Prospects:
+#   - This function retrieves a list of prospects from the database based on certain conditions.
 def get_prospects(update=False):
+    """
+    Retrieves a list of prospects from the database.
+
+    :param update: (bool, optional) Whether to retrieve all prospects or only those not related to employment. Defaults to False.
+    :return: list A list of prospect names.
+    """
+
     if update:
         try:
+            # Query to get all prospects
             query = '''
                             WITH
                                 prospects AS (
@@ -66,14 +128,17 @@ def get_prospects(update=False):
                                         );
                             '''
 
+            # Cache the function to avoid redundant queries
             data = fetch_data_from_sql(query)
 
         except SQLAlchemyError:
+            # Handle any errors that occur when executing the query
             st.warning('No prospects researched yet!')
             st.stop()
 
     else:
         try:
+            # Query to get prospects not related to employment
             query = '''
                     WITH
                         prospects AS (
@@ -99,9 +164,12 @@ def get_prospects(update=False):
                             LEFT JOIN constituent_list AS cl ON cl.id = ps.system_record_id;
                     '''
 
+            # Cache the function to avoid redundant queries
             data = fetch_data_from_sql(query)
 
         except SQLAlchemyError:
+            # Handle any errors that occur when executing the query
+            # If both previous queries fail, use a fallback query
             query = '''
                     WITH
                         prospects AS (
@@ -120,11 +188,21 @@ def get_prospects(update=False):
                             LEFT JOIN constituent_list AS cl ON cl.id = ps.system_record_id;
                     '''
 
+            # Cache the function to avoid redundant queries
             data = fetch_data_from_sql(query)
 
+    # Return a list of prospect names
     return data['prospects'].to_list()
 
 def get_basic_from_re(re_id):
+    """
+    Retrieves basic information from the database for a specific constituent based on an RE ID.
+
+    :param re_id: (str) The RE ID of the constituent to retrieve information for.
+    :return: (dict) A dictionary containing the basic information of the constituent.
+    """
+
+    # Construct the SQL query
     query = f'''
                 SELECT
                     lookup_id AS constituent_id,
@@ -151,11 +229,21 @@ def get_basic_from_re(re_id):
                 LIMIT 1;
             '''
 
+    # Fetch data from the database using the constructed query
     data = fetch_data_from_sql(query)
 
+    # Return the retrieved data as a dictionary
     return data
 
 def get_donations(re_id):
+    """
+    Retrieves donations from the database for a specific constituent based on an RE ID.
+
+    :param re_id: (str) The RE ID of the constituent to retrieve information for.
+    :return: (tuple) A tuple containing two dataframes. The first dataframe contains all donation records, and the second dataframe contains only the lifetime donation amount.
+    """
+
+    # Construct the SQL query
     query = f'''
                 SELECT
                     CONCAT(
@@ -186,8 +274,10 @@ def get_donations(re_id):
                     gl.date DESC;
             '''
 
+    # Fetch data from the database using the constructed query
     data = fetch_data_from_sql(query)
 
+    # Extract lifetime donation amount from the retrieved data
     data_1 = pd.DataFrame(data={
             'Lifetime Donation': data['amount'].sum(),
         }, index=[0])
@@ -195,6 +285,14 @@ def get_donations(re_id):
     return data, data_1
 
 def get_employment(re_id):
+    """
+    Retrieves employment information for a specific constituent based on an RE ID.
+
+    :param re_id: (str) The RE ID of the constituent to retrieve information for.
+    :return: pandas.DataFrame: A DataFrame containing employment records.
+    """
+
+    # Construct the SQL query
     query = f'''
                 SELECT
                     name AS organisation,
@@ -215,11 +313,20 @@ def get_employment(re_id):
                     end_y DESC, start_y DESC;
             '''
 
+    # Fetch data from the database using the constructed query
     data = fetch_data_from_sql(query)
 
     return data
 
 def get_education(re_id):
+    """
+    Retrieves education information for a specific constituent based on an RE ID.
+
+    :param re_id: (str) The RE ID of the constituent to retrieve information for.
+    :return: pandas.DataFrame: A DataFrame containing education records.
+    """
+
+    # Define the query for the relationship list (in case the constituent has been a student)
     query = f'''
                 SELECT
                     CASE 
@@ -253,11 +360,20 @@ def get_education(re_id):
                     class_of DESC;
             '''
 
+    # Fetch data from the database using the constructed query with parameterized conditions
     data = fetch_data_from_sql(query)
 
     return data
 
 def get_awards(re_id):
+    """
+    Retrieves award information for a specific constituent based on an RE ID.
+
+    :param re_id: (str) The RE ID of the constituent to retrieve information for.
+    :return: pandas.DataFrame: A DataFrame containing award records.
+    """
+
+    # Define the base query for the awards
     query = f'''
                 SELECT
                     value AS award,
@@ -275,32 +391,51 @@ def get_awards(re_id):
                     parent_id = '{re_id}';
             '''
 
+    # Fetch data from the database using the constructed query with parameterized conditions
     data = fetch_data_from_sql(query)
 
     return data
 
 def process_live_alumni(data):
-    # Load to dataframe
+    """
+    Processes the live alumni data by cleaning it, converting date formats, dropping unnecessary columns,
+    adding a Live Alumni URL column, and updating the SQL table.
+
+    :param data: data (str or pandas.DataFrame): The input data in CSV format or as a pandas DataFrame.
+    :return: None
+    """
+
+    # Load the data into a pandas DataFrame
     data = pd.read_csv(data)
 
-    # Remove incorrect values
+    # Remove incorrect values in the Employment Salary Min column
     data['Employment Salary Min'] = data['Employment Salary Min'].replace('="0"', np.nan)
+
+    # Repeat the same step for the Employment Salary Max and Person Rating (stars) columns
     data['Employment Salary Max'] = data['Employment Salary Max'].replace('="0"', np.nan)
     data['Person Rating (stars)'] = data['Person Rating (stars)'].replace('="0"', np.nan)
 
-    # Converting date-time column
+    # Convert the Employment Captured Date column to datetime format
     data['Employment Captured Date'] = pd.to_datetime(data['Employment Captured Date'], format='%m/%d/%Y %H:%M:%S %p')
 
-    # Drop total column
+    # Drop the _totalcount_ column from the DataFrame
     data = data.drop(columns=['_totalcount_'])
 
-    # Add Live Alumni URL
+    # Add a Live Alumni URL column to each row in the DataFrame
     data['Live Alumni URL'] = 'https://app.livealumni.com/people/details/' + data['id'].astype(str)
 
+    # Update the SQL table with the cleaned and formatted data
     update_sql_table(data, 'live_alumni', 'donor_research')
 
 # Function to format amount in Indian number format (lakhs, crores)
 def format_inr(amount):
+    """
+    Formats a number in Indian rupee (INR) style, adding commas after every 2 digits.
+
+    :param amount: (float): The amount to be formatted.
+    :return: str: The formatted amount as a string.
+    """
+
     # Convert the number to a string
     num_str = str(amount)
 
@@ -315,24 +450,39 @@ def format_inr(amount):
     remaining = int_part[:-3]
 
     if remaining != '':
+        # Split the remaining part into groups of 2 digits from right to left
         remaining = ','.join([remaining[max(i - 2, 0):i] for i in range(len(remaining), 0, -2)][::-1])
+
+        # Combine the last three digits with the formatted remaining part
         formatted_number = f'{remaining},{last_three}'
     else:
+        # If there's no decimal part, just return the last three digits
         formatted_number = last_three
 
+    # Add the Indian rupee symbol to the formatted number
     return f'₹ {formatted_number}'
 
 def display_re_data(selection):
+    """
+    Displays data from Raisers Edge for a given system record ID.
+
+    :param selection: (str): The system record ID in the format 'name (system_record_id)'.
+    :return: int: System Record ID
+    """
+
+    # Extract the name and system record ID from the input string
     name = ' '.join(selection.split('(')[0].split()[:-1]) if selection.split('(')[0].split()[-1].isnumeric() \
         else selection.split('(')[0]
     system_record_id = selection.split('(')[1].strip(')')
 
+    # Set the title and divider for the current section
     st.title(name)
     st.divider()
 
     # Get Basic info of Prospect from RE
     re_basic = get_basic_from_re(system_record_id)
 
+    # Display the basic information in a dataframe with customized column configurations
     st.subheader('Data from Raisers Edge')
     st.text('')
     st.dataframe(
@@ -364,6 +514,7 @@ def display_re_data(selection):
         }
     )
 
+    # Create two columns for the employment, education, and donation data
     col1, col2 = st.columns(2)
 
     with col1:
@@ -408,6 +559,7 @@ def display_re_data(selection):
         )
 
     with col2:
+        # Display the donations and awards data
         re_donations, re_lifetime_donations = get_donations(system_record_id)
         re_awards = get_awards(system_record_id)
 
@@ -421,6 +573,7 @@ def display_re_data(selection):
             with col3:
                 st.write(f'**Donations**')
 
+                # Display the lifetime donations dataframe
                 st.dataframe(
                     re_lifetime_donations,
                     hide_index=True,
@@ -430,6 +583,7 @@ def display_re_data(selection):
             with col4:
                 st.write('**Awards**')
 
+                # Process and display the awards dataframe
                 re_awards['date'] = pd.to_datetime(re_awards['date'])
 
                 st.dataframe(
@@ -448,6 +602,7 @@ def display_re_data(selection):
         else:
             st.write('**Donations**')
 
+            # Process and display the donations dataframe
             re_donations['date'] = pd.to_datetime(re_donations['date'], dayfirst=True)
 
             # Assuming re_donations is your DataFrame
@@ -491,6 +646,7 @@ def display_re_data(selection):
                 )
 
             with col4:
+                # Display the donation summary dataframe
                 st.write('**Donation Summary**')
                 st.dataframe(
                     re_lifetime_donations,
@@ -501,12 +657,18 @@ def display_re_data(selection):
     return system_record_id
 
 def usd_number_format(number):
+    """
+    Formats a USD number as a string with commas added after every three digits.
 
+    :param number: (int or float): The number to be formatted.
+    :return: str: The formatted number as a string.
+    """
+
+    # Check if the input is None
     if number is None:
         return number
 
     else:
-
         # Convert the number to a string
         num_str = str(number)
 
@@ -528,9 +690,18 @@ def usd_number_format(number):
         return f'$ {formatted_number}'
 
 def display_live_alumni_data(system_record_id,):
+    """
+    Displays live alumni data from a system record ID.
+
+    :param system_record_id: (int): The ID of the system record.
+    :return: None
+    """
+
+    # Display header for the section
     st.subheader('')
     st.subheader('Data from Live Alumni')
 
+    # Get live alumni data from the system record ID
     data = get_live_alumni(system_record_id)
 
     if data.empty:
@@ -542,6 +713,7 @@ def display_live_alumni_data(system_record_id,):
         col5, col6 = st.columns(2)
 
         with col5:
+            # Display employment data in a dataframe
             st.write('**Employment**')
             st.dataframe(
                 data[[
@@ -555,6 +727,7 @@ def display_live_alumni_data(system_record_id,):
                 column_config={
                     'Employment Company Name': 'Organisation',
                     'Employment Title': 'Position',
+                    # Format start and end years as USD numbers
                     'Employment Start Year': st.column_config.NumberColumn(
                         'Joining Year',
                         format='%d'
@@ -566,11 +739,14 @@ def display_live_alumni_data(system_record_id,):
                 }
             )
 
+            # Display position details
             st.write('**Position Details**')
 
+            # Format salary as USD numbers
             data['Employment Salary Min'] = data['Employment Salary Min'].apply(usd_number_format)
             data['Employment Salary Max'] = data['Employment Salary Max'].apply(usd_number_format)
 
+            # Display position details in a dataframe
             st.dataframe(
                 data[[
                     'Employment Title Is Senior',
@@ -593,7 +769,10 @@ def display_live_alumni_data(system_record_id,):
             col7, col8 = st.columns([0.8, 0.2])
 
             with col7:
+                # Display headline
                 st.write('**Headline**')
+
+                # Display headline in a dataframe
                 st.dataframe(
                     data[[
                         'Person Headline'
@@ -606,7 +785,10 @@ def display_live_alumni_data(system_record_id,):
                 )
 
             with col8:
+                # Online Links
                 st.write('**Online Links**')
+
+                # Display online links
                 st.dataframe(
                     data[[
                         'Live Alumni URL',
@@ -614,6 +796,7 @@ def display_live_alumni_data(system_record_id,):
                     ]].drop_duplicates(),
                     use_container_width=True,
                     hide_index=True,
+                    # Format link text
                     column_config={
                         'Live Alumni URL': st.column_config.LinkColumn(
                             'Live Alumni',
@@ -631,10 +814,12 @@ def display_live_alumni_data(system_record_id,):
             col9, col10 = st.columns([0.8, 0.2])
 
             with col9:
+                # Location
                 st.write('**Location**')
                 loc = [col for col in data.columns if 'Location' in col]
                 loc_1 = [col.split()[1] for col in data.columns if 'Location' in col]
 
+                # Display location details in a dataframe
                 st.dataframe(
                     data[
                         loc
@@ -645,6 +830,7 @@ def display_live_alumni_data(system_record_id,):
                 )
 
             with col10:
+                # Rating
                 st.write('**Rating**')
                 rating = data['Person Rating (stars)'][0]
                 if rating is None:
@@ -656,7 +842,9 @@ def display_live_alumni_data(system_record_id,):
         col11, col12 = st.columns(2)
 
         with col11:
+            # Industry
             st.write('**Industry Details**')
+
             st.dataframe(
                 data[
                     [col for col in data.columns if col.startswith('Company')]
@@ -672,7 +860,9 @@ def display_live_alumni_data(system_record_id,):
             )
 
         with col12:
+            # Education
             st.write('**Education**')
+
             st.dataframe(
                 data[[
                     'University Name',
@@ -701,6 +891,14 @@ def display_live_alumni_data(system_record_id,):
             )
 
 def get_live_alumni(re_id):
+    """
+    Retrieves live alumni data for a specific system record ID from the database.
+
+    :param re_id: (int): The system record ID to retrieve data for.
+    :return: pd.DataFrame: A DataFrame containing the retrieved live alumni data.
+    """
+
+    # Define the SQL query to fetch live alumni data
     query = f'''
                 WITH
                     la_re_mapping AS (
@@ -722,15 +920,27 @@ def get_live_alumni(re_id):
                     map.re_id = '{re_id}'
             '''
 
+    # Fetch data from the SQL query
     data = fetch_data_from_sql(query)
 
     return data
 
 def save_manual_employment(re_id):
+    """
+    Saves employment details from Raisers Edge (auto-populated) and Live Alumni,
+    then combines them into a single DataFrame.
+
+    :param re_id: (int): The system record ID to retrieve data for.
+    :return: pd.DataFrame: A DataFrame containing the combined employment data.
+    """
+
+    # Display header for the section
     st.write('**Employment** `(auto-populated from Live Alumni & Raisers Edge)`')
+
+    # Fetch employment data from Raisers Edge
     re_employment = get_employment(re_id)
 
-    # RE Data
+    # Rename columns to match desired format
     re_employment = re_employment.rename(columns={
         'organisation': 'Organisation',
         'position': 'Position',
@@ -738,14 +948,17 @@ def save_manual_employment(re_id):
         'end_year': 'End Year'
     })
 
-    # Live Alumni Data
+    # Fetch employment data from Live Alumni
     la_employment = get_live_alumni(re_id)
 
+    # Drop duplicate rows and select relevant columns
     la_employment = la_employment.drop_duplicates()
 
+    # Rename columns to match desired format
     la_employment = la_employment[['Employment Company Name', 'Employment Title', 'Employment Start Year',
                                    'Employment End Year']]
 
+    # Combine employment data from both sources
     la_employment = la_employment.rename(columns={
         'Employment Company Name': 'Organisation',
         'Employment Title': 'Position',
@@ -755,9 +968,11 @@ def save_manual_employment(re_id):
 
     data = pd.concat([la_employment, re_employment], ignore_index=True, axis=0)
 
+    # Clean and normalize data
     data['Organisation'] = data['Organisation'].str.strip()
     data['Position'] = data['Position'].str.strip()
 
+    # Initialize variables with default values (None)
     data['Industry'] = None
     data['Is Senior?'] = None
     data['Salary'] = None
@@ -768,15 +983,24 @@ def save_manual_employment(re_id):
     data['Share Price'] = None
     data['Comments'] = None
 
+    # Drop duplicate rows and reset index
     data = data.drop_duplicates(ignore_index=True).reset_index(drop=True)
 
     return data
 
 def save_manual_education(re_id):
+    """
+    Saves education details from Raisers Edge (auto-populated) and Live Alumni,
+    then combines them into a single DataFrame.
 
-    # RE Data
+    :param re_id: (int): The system record ID to retrieve data for.
+    :return: pd.DataFrame: A DataFrame containing the combined education data.
+    """
+
+    # Fetch education data from Raisers Edge
     re_education = get_education(re_id)
 
+    # Rename columns to match desired format
     re_education = re_education.rename(columns={
         'school': 'University',
         'hostel': 'Hostel',
@@ -785,37 +1009,48 @@ def save_manual_education(re_id):
         'department': 'Department'
     })
 
-    # Live Alumni
+    # Fetch education data from Live Alumni
     la_education = get_live_alumni(re_id)
 
+    # Select relevant columns from Live Alumni data
     la_education = la_education[[
-                    'University Name',
+                    'University Name',                                      # Rename to match Raisers Edge format later
                     'Education Start Date',
                     'Education End Date',
                     'Education Degree',
                     'Education Major'
                 ]]
 
+    # Rename columns in Live Alumni data to match Raisers Edge format
     la_education = la_education.rename(columns={
-        'University Name': 'University',
+        'University Name': 'University',                                   # Match with Raisers Edge column 'school' later
         'Education Start Date': 'Joining Year',
         'Education End Date': 'Graduated on',
         'Education Degree': 'Degree',
         'Education Major': 'Department'
     })
 
+    # Combine education data from both sources
     data = pd.concat([re_education, la_education], ignore_index=True, axis=0)
 
+    # Select only the relevant columns for education data
     # data = data[['University', 'Joining Year', 'Graduated on', 'Degree', 'Department', 'Hostel']]
     data = data[['University', 'Joining Year', 'Graduated on', 'Degree', 'Department']]
 
+    # Drop duplicate rows and reset index
     data = data.drop_duplicates(ignore_index=True).reset_index(drop=True)
 
+    # Sort education data by graduation year in descending order, then by joining year in ascending order
     data = data.sort_values(by=['Graduated on', 'Joining Year'], ascending=[False, True], ignore_index=True)
 
     return data
 
 def save_manual_location():
+    """
+    Saves location details into a DataFrame.
+
+    :return: Empty Dataframe with column: Location
+    """
     data = pd.DataFrame(data={
         'Location': [None]
     })
@@ -823,6 +1058,11 @@ def save_manual_location():
     return data
 
 def save_manual_net_worth():
+    """
+    Saves net worth details into a DataFrame.
+
+    :return: Empty Dataframe with column: Net worth
+    """
     data = pd.DataFrame(data={
         'Net worth': [np.nan]
     })
@@ -830,6 +1070,13 @@ def save_manual_net_worth():
     return data
 
 def save_manual_philanthropy():
+    """
+    Saves philanthropy details into a DataFrame.
+
+    :return: pd.DataFrame: A DataFrame containing the philanthropy data.
+    """
+
+    # Initialize an empty DataFrame with philanthropy data
     data = pd.DataFrame(data={
         'Foundation': [None],
         'Date': [None],
@@ -840,35 +1087,64 @@ def save_manual_philanthropy():
     return data
 
 def get_df_shape_product(df):
+    """
+    Calculates the product of the number of rows and columns in a DataFrame.
+
+    :param df: (pd.DataFrame): The input DataFrame.
+    :return: int: The product of the number of rows and columns.
+    """
+
+    # Calculate the product of the number of rows and columns
     return df.shape[0] * df.shape[1]
 
 def get_null_values(df):
+    """
+    Calculates the total count of null values in a DataFrame.
+
+    :param df: (pd.DataFrame): The input DataFrame.
+    :return: int: The total count of null values.
+    """
+
+    # Directly identify all missing values and sum their counts
     return df.replace('', None).isnull().sum().sum()
 
 def get_research(re_id):
+    """
+    Retrieves data from various functions and returns it as a dictionary.
+
+    :param re_id: (int): The Raisers Edge ID.
+    :return: dict: A dictionary containing the research data.
+    """
+
+    # Fetch employment data from get_research_employment function
     st.write('**Employment**')
     employment = get_research_employment(re_id)
 
     col1, col2 = st.columns(2)
 
     with col1:
+        # Fetch education data from get_research_education function
         st.write('**Education**')
         education = get_research_education(re_id)
 
     with col2:
+        # Fetch philanthropy data from get_research_philanthropy function
         st.write('**Philanthropy**')
         philanthropy = get_research_philanthropy(re_id)
 
         col3, col4 = st.columns([0.6, 0.4])
 
         with col3:
+            # Fetch location data from get_research_location function
             st.write('**Location**')
             location = get_research_location(re_id)
 
         with col4:
+            # Fetch net worth data from get_research_net_worth function
             st.write('**Net Worth**')
             net_worth = get_research_net_worth(re_id)
 
+    # Fetch remarks data from get_research_remarks function
     st.write('**Remarks**')
     remarks = get_research_remarks(re_id)
 
