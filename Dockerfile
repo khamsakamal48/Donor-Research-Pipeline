@@ -1,15 +1,6 @@
 # Use a lightweight Python image
 FROM python:slim
 
-# Install required system packages
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    g++ \
-    libglib2.0-0 \
-    libx11-6 \
-    libxext6 \
-    && rm -rf /var/lib/apt/lists/*
-
 # Set the working directory inside the container
 WORKDIR /app
 
