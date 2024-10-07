@@ -14,7 +14,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Expose port 8503 inside the container
-EXPOSE 8503
+EXPOSE 8501
 
 # Command to run the Python application (modify based on your app's entry point)
 CMD ["streamlit", "run", "app/app.py"]
