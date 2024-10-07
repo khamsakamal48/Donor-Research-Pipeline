@@ -5,7 +5,7 @@ FROM python:slim
 WORKDIR /app
 
 # Copy the requirements.txt file (if it exists)
-COPY requirements.txt ./
+COPY app/requirements.txt ./
 
 # Install any required Python packages
 RUN pip install --no-cache-dir -r requirements.txt
