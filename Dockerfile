@@ -17,4 +17,4 @@ COPY . .
 EXPOSE 8503
 
 # Command to run the Python application (modify based on your app's entry point)
-CMD ["streamlit", "run", "app.py"]
+CMD ["streamlit", "run", "app/app.py"]
